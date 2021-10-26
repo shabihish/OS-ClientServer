@@ -159,10 +159,6 @@ void send_answers_back(char **answers, int best_answer, int server_fd) {
     send(server_fd, res, strlen(res), 0);
 }
 
-void flush_inbuffer() {
-    while (getchar() != EOF);
-}
-
 int main(int argc, char *argv[]) {
     int port = atoi(argv[1]);
     if (port <= 0)
@@ -212,18 +208,19 @@ int main(int argc, char *argv[]) {
 
     for (int i = 0; i < 3; i++) {
         // Receive asking id ID from the server and print it
-        num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
         int answering_ids[2];
         int asking_id;
-        if (sscanf(buffer, "%d %d %d", &asking_id, &answering_ids[0], &answering_ids[1]) <= 0)
-            print_err_and_quit("Could not read asking and answering order.");
+
+        buffer[0] = '\0';
+        while(sscanf(buffer, "%d %d %d", &asking_id, &answering_ids[0], &answering_ids[1]) <= 0)
+            num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
+
         sprintf(buffer, "It is client%d's role to ask.", asking_id);
         print_msg(buffer, -1, 1);
         // Get users' questions and answers
         if (asking_id == id) {
             char **answers = malloc(sizeof(char) * 2);
             ask_question(bc_fd, &address, id);
-//            flush_inbuffer();
 
             char *answer = wait_for_response(bc_fd, id);
 
@@ -246,7 +243,6 @@ int main(int argc, char *argv[]) {
 
             answer_question(bc_fd, &address, id);
 
-//            flush_inbuffer();
             wait_for_response(bc_fd, id);
 
         } else if (answering_ids[1] == id) {
@@ -256,7 +252,6 @@ int main(int argc, char *argv[]) {
 
             answer_question(bc_fd, &address, id);
 
-//            flush_inbuffer();
         } else
             print_err_and_quit("Getting turn in Q&A failed.");
     }
