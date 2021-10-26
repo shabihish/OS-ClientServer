@@ -90,10 +90,10 @@ add_client_to_specific_group_buffer(field_list *comp, field_list *elec, field_li
             curr_list = comp;
     }
 
-    if (curr_list->len < 2){
+    if (curr_list->len < 2) {
         curr_list->list[curr_list->len] = client;
         curr_list->len++;
-    }else {
+    } else {
         room *new_room;
         new_room = malloc(sizeof(room));
         new_room->msg_count = 0;
@@ -107,16 +107,10 @@ add_client_to_specific_group_buffer(field_list *comp, field_list *elec, field_li
     return NULL;
 }
 
-void assign_broadcast_port(room r, int port, fd_set* rooms_set) {
+void assign_broadcast_port(room r, int port, fd_set *rooms_set) {
     char buffer[1024];
-    sprintf(buffer, "New broadcast port is assigned: %d\n", port);
+    sprintf(buffer, "%d", port);
     for (int i = 0; i < 3; i++) {
-        send(r.fds[i], buffer, strlen(buffer), 0);
-    }
-
-    sprintf(buffer, "Please write your summary: \n");
-    for (int i = 0; i < 3; i++) {
-        FD_SET(r.fds[i], rooms_set);
         send(r.fds[i], buffer, strlen(buffer), 0);
     }
 }
@@ -151,6 +145,14 @@ void close_room(room r, fd_set *rooms_set, fd_set *master_set) {
     }
 }
 
+void announce_role(int role, room *r) {
+    char buffer[1024];
+    sprintf(buffer, "%d", r->fds[role]);
+    for (int i = 0; i < 3; i++) {
+        send(r->fds[i], buffer, strlen(buffer), 0);
+    }
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 2)
         print_err_and_quit("Could not read port from calling input. Quitting...");
@@ -163,7 +165,7 @@ int main(int argc, char *argv[]) {
     char buffer[2048] = {0};
     char print_buffer[1024];
     fd_set master_set, working_set, rooms_set;
-    room **rooms;
+    room **rooms=NULL;
     int last_assigned_port = BASE_ASSIGNED_BROADCAST_PORT - 1, rooms_len = 0;
 
     server_fd = init_server(port);
@@ -196,8 +198,10 @@ int main(int argc, char *argv[]) {
                     sprintf(print_buffer, "New client with ID=%d connected", new_socket);
                     print_successs_msg(print_buffer);
 
-                    sprintf(buffer,
-                            "Please select a field:\n\t[1]Computer Engineering\n\t[2]Electrical Engineering\n\t[3]Mechanics Engineering[4]\n\tDefualt: 1\n");
+                    sprintf(buffer, "%d", new_socket);
+                    send(new_socket, buffer, strlen(buffer), 0);
+
+                    sprintf(buffer,"Please select a field:\n[1]Computer (default) Engineering\n[2]Electrical Engineering\n[3]Mechanics Engineering[4]");
                     send(new_socket, buffer, strlen(buffer), 0);
                 } else {
                     if (FD_ISSET(i, &rooms_set)) {
@@ -218,6 +222,7 @@ int main(int argc, char *argv[]) {
                         r->msg_count++;
                         if (r->msg_count == 3)
                             close_room(*r, &rooms_set, &master_set);
+                        announce_role(r->msg_count, r);
                     } else {
                         if (recv(i, buffer, 2048, 0) == 0) {
                             close(i);
@@ -237,9 +242,12 @@ int main(int argc, char *argv[]) {
                                                                              client_choice);
                         if (new_room != NULL) {
                             assign_broadcast_port(*new_room, ++last_assigned_port, &rooms_set);
-                            rooms = realloc(rooms, (rooms_len + 1) * sizeof(room));
-                            rooms[rooms_len] = new_room;
+                            announce_role(0, new_room);
+
                             rooms_len++;
+                            rooms = realloc(rooms, rooms_len * sizeof(room*));
+                            rooms[rooms_len - 1] = new_room;
+                            announce_role(new_room->msg_count, new_room);
                         }
                     }
                 }
@@ -249,40 +257,3 @@ int main(int argc, char *argv[]) {
     }
     return 0;
 }
-
-
-
-/*
-while (1) {
-working_set = master_set;
-select(max_fd_id + 1, &working_set, NULL, NULL, NULL);
-
-for (int i = 0; i < max_fd_id; i++) {
-if (FD_ISSET(i, &working_set)) {
-if (i == server_fd) {
-new_socket = acceptClient(server_fd);
-FD_SET(new_socket, &master_set);
-if (new_socket > max_fd_id)
-max_fd_id = new_socket;
-sprintf(print_buffer, "New client with ID=%d connected", new_socket);
-print_successs_msg(print_buffer);
-} else {
-if(recv(i, buffer, strlen(buffer), 0)==0){
-close(i);
-FD_CLR(i, &master_set);
-
-sprintf(print_buffer, "Closed connection to client with ID=%d", i);
-print_successs_msg(print_buffer);
-}
-
-// Reading input from a client into the buffer has been successful
-
-
-
-}
-
-
-}
-}
-
-}*/
