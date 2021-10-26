@@ -13,7 +13,7 @@
 
 #define MAX_ROOM_CONNECTIONS 3
 #define LOOPBACK_ADDR "127.0.0.1"
-#define BROADCAST_ADDR24 "127.0.0.1"
+#define BROADCAST_ADDR24 "192.168.1.255"
 #define BASE_ASSIGNED_BROADCAST_PORT 9000
 
 
@@ -141,6 +141,7 @@ int main(int argc, char *argv[]) {
 
     // receive the introduction message from the server and print it
     num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
+    printf("AAAAA: %d\n", num_of_bytes);
     print_msg(buffer, num_of_bytes, 1);
 
     // Read field choice from user (user response) and send it to server
@@ -151,6 +152,7 @@ int main(int argc, char *argv[]) {
     num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
     if (num_of_bytes <= 0)
         print_err_and_quit("Failed to fetch broadcast port number from the server.");
+    print_msg(buffer, num_of_bytes, 1);
     int bc_port = atoi(buffer);
     sprintf(buffer, "Broadcast port is announced: %d", bc_port);
     print_successs_msg(buffer);
@@ -164,6 +166,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < 3; i++) {
         // Receive asking id ID from the server and print it
         num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
+        print_msg(buffer, num_of_bytes, 1);
         int asking_id = atoi(buffer);
         sprintf(buffer, "It is client%d's role to ask.", asking_id);
         print_msg(buffer, -1, 1);

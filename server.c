@@ -13,6 +13,9 @@
 #define LOOPBACK_ADDR "127.0.0.1"
 #define BASE_ASSIGNED_BROADCAST_PORT 9000
 
+char buffer[1024];
+char print_buffer[1024];
+
 typedef struct {
     int list[3];
     int len;
@@ -74,7 +77,7 @@ int acceptClient(int serverFd) {
 
 room *
 add_client_to_specific_group_buffer(field_list *comp, field_list *elec, field_list *mech, field_list *civil, int client,
-                                    int request) {
+                                    int request, fd_set *rooms_set) {
     field_list *curr_list;
     switch (request) {
         case 2:
@@ -97,8 +100,10 @@ add_client_to_specific_group_buffer(field_list *comp, field_list *elec, field_li
         room *new_room;
         new_room = malloc(sizeof(room));
         new_room->msg_count = 0;
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 2; i++) {
             new_room->fds[i] = curr_list->list[i];
+            FD_SET(curr_list->list[i], rooms_set);
+        }
         new_room->fds[2] = client;
 
         curr_list->len = 0;
@@ -107,8 +112,7 @@ add_client_to_specific_group_buffer(field_list *comp, field_list *elec, field_li
     return NULL;
 }
 
-void assign_broadcast_port(room r, int port, fd_set *rooms_set) {
-    char buffer[1024];
+void assign_broadcast_port(room r, int port) {
     sprintf(buffer, "%d", port);
     for (int i = 0; i < 3; i++) {
         send(r.fds[i], buffer, strlen(buffer), 0);
@@ -137,20 +141,180 @@ void write_messages_to_file(room r) {
 void close_room(room r, fd_set *rooms_set, fd_set *master_set) {
     write_messages_to_file(r);
 
-    char *buffer = "The room has been closed.";
+    sprintf(buffer, "The room has been closed.");
     for (int i = 0; i < 3; i++) {
         send(r.fds[i], buffer, strlen(buffer), 0);
-        FD_CLR(i, rooms_set);
-        FD_CLR(i, master_set);
+        FD_CLR(r.fds[i], rooms_set);
+        FD_CLR(r.fds[i], master_set);
     }
 }
 
 void announce_role(int role, room *r) {
-    char buffer[1024];
     sprintf(buffer, "%d", r->fds[role]);
     for (int i = 0; i < 3; i++) {
         send(r->fds[i], buffer, strlen(buffer), 0);
     }
+}
+
+void init_fd_sets(fd_set *master_set, fd_set *rooms_set, fd_set *working_set, int server_fd) {
+    FD_ZERO(master_set);
+    FD_ZERO(rooms_set);
+    FD_SET(server_fd, master_set);
+}
+
+int add_new_client(int server_fd, int *max_fd_id) {
+    int new_socket = acceptClient(server_fd);
+    if (new_socket > *max_fd_id)
+        *max_fd_id = new_socket;
+
+    sprintf(print_buffer, "New client with ID=%d connected", new_socket);
+    print_successs_msg(print_buffer);
+
+    sprintf(buffer, "%d", new_socket);
+    send(new_socket, buffer, strlen(buffer), 0);
+
+    sprintf(buffer,
+            "Please select a field:\n[1]Computer Engineering (default)\n[2]Electrical Engineering\n[3]Mechanics Engineering\n[4] Civil Engineering");
+    send(new_socket, buffer, strlen(buffer), 0);
+
+    return new_socket;
+}
+
+void disconnect_from_client(int client, fd_set *master_set) {
+    close(client);
+    FD_CLR(client, master_set);
+
+    sprintf(print_buffer, "Closed connection to client with ID=%d", client);
+    print_successs_msg(print_buffer);
+}
+
+int add_message_to_room_archive(int client, room *r, fd_set *master_set, fd_set *rooms_set) {
+    if (r == NULL || recv(client, buffer, 2048, 0) == 0) {
+        return -1;
+    }
+
+    int client_index = -1;
+
+    strcpy(r->messages[client_index], buffer);
+    r->msg_count++;
+    if (r->msg_count == 3)
+        close_room(*r, rooms_set, master_set);
+    else
+        announce_role(r->msg_count, r);
+    return 0;
+}
+
+int
+assign_room_to_client(int client, fd_set *master_set, fd_set *rooms_set, room **rooms, int *rooms_len, int next_port,
+                      field_list *comp, field_list *elec, field_list *mech, field_list *civil) {
+    if (recv(client, buffer, 2048, 0) == 0)
+        return -1;
+    // Reading input from a client into the buffer has been successful
+    int client_choice = atoi(buffer);
+
+    // Set the default choice
+    if (client_choice <= 0 || client_choice > 4)
+        client_choice = 1;
+
+    room *new_room = add_client_to_specific_group_buffer(comp, elec, mech, civil, client,
+                                                         client_choice, rooms_set);
+    if (new_room != NULL) {
+        assign_broadcast_port(*new_room, next_port);
+
+        *rooms_len++;
+        rooms = realloc(rooms, *rooms_len * sizeof(room *));
+        rooms[*rooms_len - 1] = new_room;
+        announce_role(new_room->msg_count, new_room);
+    }
+    return 0;
+}
+/*
+
+void krkfr() {
+    if (FD_ISSET(i, &rooms_set)) {
+        if (recv(i, buffer, 2048, 0) == 0) {
+            close(i);
+            FD_CLR(i, &master_set);
+
+            sprintf(print_buffer, "Closed connection to client with ID=%d", i);
+            print_successs_msg(print_buffer);
+        }
+
+        int client_index = -1;
+        room *r = find_room(rooms, rooms_len, i, &client_index);
+        if (r == NULL) {
+            continue;
+        }
+        strcpy(r->messages[client_index], buffer);
+        r->msg_count++;
+        if (r->msg_count == 3)
+            close_room(*r, &rooms_set, &master_set);
+        announce_role(r->msg_count, r);
+    } else {
+        if (recv(i, buffer, 2048, 0) == 0) {
+            close(i);
+            FD_CLR(i, &master_set);
+
+            sprintf(print_buffer, "Closed connection to client with ID=%d", i);
+            print_successs_msg(print_buffer);
+        }
+        // Reading input from a client into the buffer has been successful
+        int client_choice = atoi(buffer);
+
+        // Set the default choice
+        if (client_choice <= 0 || client_choice > 4)
+            client_choice = 1;
+
+        room *new_room = add_client_to_specific_group_buffer(&comp, &elec, &mech, &civil, i,
+                                                             client_choice);
+        if (new_room != NULL) {
+            assign_broadcast_port(*new_room, ++last_assigned_port, &rooms_set);
+            announce_role(0, new_room);
+
+            rooms_len++;
+            rooms = realloc(rooms, rooms_len * sizeof(room *));
+            rooms[rooms_len - 1] = new_room;
+            announce_role(new_room->msg_count, new_room);
+        }
+    }
+}
+
+*/
+
+//close(client);
+//        FD_CLR(client, master_set);
+//
+//        sprintf(print_buffer, "Closed connection to client with ID=%d", client);
+//        print_successs_msg(print_buffer);
+//
+
+
+void
+select_fds(int server_fd, fd_set *master_set, fd_set *working_set, fd_set *rooms_set, int *max_fd_id, room **rooms,
+           int *rooms_len, int *last_assigned_port, field_list *comp, field_list *elec, field_list *mech,
+           field_list *civil) {
+    *working_set = *master_set;
+    select(*max_fd_id + 1, working_set, NULL, NULL, NULL);
+
+
+    for (int i = 0; i <= *max_fd_id; i++) {
+        if (!FD_ISSET(i, working_set))
+            continue;
+        if (i == server_fd) {
+            int new_socket = add_new_client(server_fd, max_fd_id);
+            FD_SET(new_socket, master_set);
+        } else if (FD_ISSET(i, rooms_set)) {
+            room *r = find_room(rooms, *rooms_len, i, NULL);
+            if (add_message_to_room_archive(i, r, master_set,
+                                            rooms_set) < -1)
+                close_room(*r, rooms_set, master_set);
+        } else {
+            if (assign_room_to_client(i, master_set, rooms_set, rooms, rooms_len, ++(*last_assigned_port), comp, elec,
+                                      mech, civil) < 0)
+                disconnect_from_client(i, master_set);
+        }
+    }
+
 }
 
 int main(int argc, char *argv[]) {
@@ -164,20 +328,18 @@ int main(int argc, char *argv[]) {
     int server_fd, new_socket;
     char buffer[2048] = {0};
     char print_buffer[1024];
-    fd_set master_set, working_set, rooms_set;
-    room **rooms=NULL;
+    room **rooms = NULL;
     int last_assigned_port = BASE_ASSIGNED_BROADCAST_PORT - 1, rooms_len = 0;
 
     server_fd = init_server(port);
-    int max_fd_id = server_fd;
-
-    FD_ZERO(&master_set);
-    FD_ZERO(&rooms_set);
-    max_fd_id = server_fd;
-    FD_SET(server_fd, &master_set);
-
     sprintf(print_buffer, "Server currently listening at %s:%d", LOOPBACK_ADDR, port);
+
+
     print_successs_msg(print_buffer);
+    fd_set master_set, working_set, rooms_set;
+    init_fd_sets(&master_set, &rooms_set, &working_set, server_fd);
+
+    int max_fd_id = server_fd;
 
     field_list comp;
     field_list elec;
@@ -185,75 +347,7 @@ int main(int argc, char *argv[]) {
     field_list civil;
 
     while (1) {
-        working_set = master_set;
-        select(max_fd_id + 1, &working_set, NULL, NULL, NULL);
-
-        for (int i = 0; i <= max_fd_id; i++) {
-            if (FD_ISSET(i, &working_set)) {
-                if (i == server_fd) {
-                    new_socket = acceptClient(server_fd);
-                    FD_SET(new_socket, &master_set);
-                    if (new_socket > max_fd_id)
-                        max_fd_id = new_socket;
-                    sprintf(print_buffer, "New client with ID=%d connected", new_socket);
-                    print_successs_msg(print_buffer);
-
-                    sprintf(buffer, "%d", new_socket);
-                    send(new_socket, buffer, strlen(buffer), 0);
-
-                    sprintf(buffer,"Please select a field:\n[1]Computer (default) Engineering\n[2]Electrical Engineering\n[3]Mechanics Engineering[4]");
-                    send(new_socket, buffer, strlen(buffer), 0);
-                } else {
-                    if (FD_ISSET(i, &rooms_set)) {
-                        if (recv(i, buffer, 2048, 0) == 0) {
-                            close(i);
-                            FD_CLR(i, &master_set);
-
-                            sprintf(print_buffer, "Closed connection to client with ID=%d", i);
-                            print_successs_msg(print_buffer);
-                        }
-
-                        int client_index = -1;
-                        room *r = find_room(rooms, rooms_len, i, &client_index);
-                        if (r == NULL) {
-                            continue;
-                        }
-                        strcpy(r->messages[client_index], buffer);
-                        r->msg_count++;
-                        if (r->msg_count == 3)
-                            close_room(*r, &rooms_set, &master_set);
-                        announce_role(r->msg_count, r);
-                    } else {
-                        if (recv(i, buffer, 2048, 0) == 0) {
-                            close(i);
-                            FD_CLR(i, &master_set);
-
-                            sprintf(print_buffer, "Closed connection to client with ID=%d", i);
-                            print_successs_msg(print_buffer);
-                        }
-                        // Reading input from a client into the buffer has been successful
-                        int client_choice = atoi(buffer);
-
-                        // Set the default choice
-                        if (client_choice <= 0 || client_choice > 4)
-                            client_choice = 1;
-
-                        room *new_room = add_client_to_specific_group_buffer(&comp, &elec, &mech, &civil, i,
-                                                                             client_choice);
-                        if (new_room != NULL) {
-                            assign_broadcast_port(*new_room, ++last_assigned_port, &rooms_set);
-                            announce_role(0, new_room);
-
-                            rooms_len++;
-                            rooms = realloc(rooms, rooms_len * sizeof(room*));
-                            rooms[rooms_len - 1] = new_room;
-                            announce_role(new_room->msg_count, new_room);
-                        }
-                    }
-                }
-            }
-
-        }
+        select_fds(server_fd, &master_set, &working_set, &rooms_set, &max_fd_id, rooms, &rooms_len, &last_assigned_port,
+                   &comp, &elec, &mech, &civil);
     }
-    return 0;
 }
