@@ -9,7 +9,6 @@
 #include <sys/time.h>
 #include <limits.h>
 
-#define MAX_ROOM_CONNECTIONS 3
 #define LOOPBACK_ADDR "127.0.0.1"
 #define BASE_ASSIGNED_BROADCAST_PORT 9000
 
@@ -105,6 +104,7 @@ add_client_to_specific_group_buffer(field_list *comp, field_list *elec, field_li
             FD_SET(curr_list->list[i], rooms_set);
         }
         new_room->fds[2] = client;
+        FD_SET(client, rooms_set);
 
         curr_list->len = 0;
         return new_room;
@@ -133,10 +133,11 @@ room *find_room(room **rooms, int rooms_len, int client, int *client_index) {
 }
 
 void write_messages_to_file(room r) {
-    int f = open("messages.txt", O_APPEND);
+    int f = open("messages.txt", O_CREAT | O_APPEND | O_RDWR);
     for (int i = 0; i < 3; i++) {
         write(f, r.messages[i], strlen(r.messages[i]));
     }
+    close(f);
 }
 
 void close_room(room r, fd_set *rooms_set, fd_set *master_set) {
@@ -157,9 +158,10 @@ void announce_role(int role, room *r) {
     }
 }
 
-void init_fd_sets(fd_set *master_set, fd_set *rooms_set, fd_set *working_set, int server_fd) {
+void init_fd_sets(fd_set *master_set, fd_set *rooms_set, fd_set *added_set, fd_set *working_set, int server_fd) {
     FD_ZERO(master_set);
     FD_ZERO(rooms_set);
+    FD_ZERO(added_set);
     FD_SET(server_fd, master_set);
 }
 
@@ -173,6 +175,7 @@ int add_new_client(int server_fd, int *max_fd_id) {
 
     sprintf(buffer, "%d", new_socket);
     send(new_socket, buffer, strlen(buffer), 0);
+    sleep(1);
 
     sprintf(buffer,
             "Please select a field:\n[1]Computer Engineering (default)\n[2]Electrical Engineering\n[3]Mechanics Engineering\n[4] Civil Engineering");
@@ -181,10 +184,16 @@ int add_new_client(int server_fd, int *max_fd_id) {
     return new_socket;
 }
 
-void disconnect_from_client(int client, fd_set *master_set) {
+void disconnect_from_client(int client, fd_set *master_set, room *r) {
     close(client);
     FD_CLR(client, master_set);
 
+    for (int i = 0; i < 3; i++) {
+        if (r->fds[i] == client) {
+            r->fds[i] = -1;
+            break;
+        }
+    }
     sprintf(print_buffer, "Closed connection to client with ID=%d", client);
     print_successs_msg(print_buffer);
 }
@@ -198,9 +207,9 @@ int add_message_to_room_archive(int client, room *r, fd_set *master_set, fd_set 
     buffer[num_of_bytes] = '\0';
     strcpy(r->messages[r->msg_count], buffer);
     r->msg_count = r->msg_count + 1;
-    if (r->msg_count == 3)
+    if (r->msg_count == 3) {
         close_room(*r, rooms_set, master_set);
-    else
+    } else
         announce_role(r->msg_count, r);
     return 0;
 }
@@ -232,7 +241,8 @@ assign_room_to_client(int client, fd_set *master_set, fd_set *rooms_set, room **
 }
 
 void
-select_fds(int server_fd, fd_set *master_set, fd_set *working_set, fd_set *rooms_set, int *max_fd_id, room ***rooms,
+select_fds(int server_fd, fd_set *master_set, fd_set *working_set, fd_set *rooms_set, fd_set *added_set, int *max_fd_id,
+           room ***rooms,
            int *rooms_len, int *last_assigned_port, field_list *comp, field_list *elec, field_list *mech,
            field_list *civil) {
     *working_set = *master_set;
@@ -251,11 +261,15 @@ select_fds(int server_fd, fd_set *master_set, fd_set *working_set, fd_set *rooms
                                             rooms_set) < -1)
                 close_room(*r, rooms_set, master_set);
             FD_CLR(i, rooms_set);
-            printf("TTTTTTTTTTTTTTTTTTTT\n");
+        } else if (FD_ISSET(i, added_set)) {
+            FD_CLR(i, added_set);
         } else {
             if (assign_room_to_client(i, master_set, rooms_set, rooms, rooms_len, ++(*last_assigned_port), comp, elec,
-                                      mech, civil) < 0)
-                disconnect_from_client(i, master_set);
+                                      mech, civil) < 0) {
+                room *r = find_room(*rooms, *rooms_len, i, NULL);
+                disconnect_from_client(i, master_set, r);
+            } else
+                FD_SET(i, added_set);
         }
     }
 
@@ -281,18 +295,18 @@ int main(int argc, char *argv[]) {
 
 
     print_successs_msg(print_buffer);
-    fd_set master_set, working_set, rooms_set;
-    init_fd_sets(&master_set, &rooms_set, &working_set, server_fd);
+    fd_set master_set, working_set, rooms_set, added_set;
+    init_fd_sets(&master_set, &rooms_set, &added_set, &working_set, server_fd);
 
     int max_fd_id = server_fd;
 
-    field_list comp;
-    field_list elec;
-    field_list mech;
-    field_list civil;
+    field_list comp={0};
+    field_list elec={0};
+    field_list mech={0};
+    field_list civil={0};
 
     while (1) {
-        select_fds(server_fd, &master_set, &working_set, &rooms_set, &max_fd_id, &rooms, &rooms_len,
+        select_fds(server_fd, &master_set, &working_set, &rooms_set, &added_set, &max_fd_id, &rooms, &rooms_len,
                    &last_assigned_port,
                    &comp, &elec, &mech, &civil);
     }

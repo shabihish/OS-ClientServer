@@ -86,12 +86,18 @@ void udp_send(int bc_fd, char *buffer, struct sockaddr_in *address, int id) {
     sendto(bc_fd, new_buffer, strlen(new_buffer), 0, (struct sockaddr *) address, sizeof(*address));
 }
 
-void ask_question(int bc_fd, struct sockaddr_in *address, int id) {
+char *ask_question(int bc_fd, struct sockaddr_in *address, int id) {
     char buffer[1024];
 
     print_msg("Please ask your question: \n", -1, 0);
-    if (read(0, buffer, sizeof(buffer)) >= 0)
+    int num_of_bytes = read(0, buffer, sizeof(buffer));
+    if (num_of_bytes >= 0)
         udp_send(bc_fd, buffer, address, id);
+
+    char *res = malloc((num_of_bytes + 1) * sizeof(char));
+    strcpy(res, buffer);
+    res[num_of_bytes] = '\0';
+    return res;
 }
 
 void wait_for_question(int bc_fd, int id) {
@@ -114,27 +120,41 @@ void wait_for_question(int bc_fd, int id) {
 }
 
 void answer_question(int bc_fd, struct sockaddr_in *address, int id) {
+    alarm(60);
     char buffer[1024];
     print_msg("Please write your answer: ", -1, 1);
-    if (read(0, buffer, sizeof(buffer)) >= 0)
+    if (read(0, buffer, sizeof(buffer)) > 0)
         udp_send(bc_fd, buffer, address, id);
+    else{
+        char* tmp = "pass";
+        udp_send(bc_fd, tmp, address, id);
+    }
+
 }
 
 char *wait_for_response(int bc_fd, int id) {
+    alarm(60);
+
     char buffer[1024];
     print_successs_msg("Awaiting response from the other client...");
     int num_of_bytes = recv(bc_fd, buffer, sizeof(buffer), 0);
 
     int sending_id;
     char new_buffer[1024];
-    if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
-        print_err_and_quit("Could not decode peer message.");
-    if (id == sending_id)
-        num_of_bytes = recv(bc_fd, buffer, sizeof(buffer), 0);
+    if (num_of_bytes > 0) {
 
-    if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
-        print_err_and_quit("Could not decode peer message.");
+        if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
+            print_err_and_quit("Could not decode peer message.");
+        if (id == sending_id)
+            num_of_bytes = recv(bc_fd, buffer, sizeof(buffer), 0);
 
+        if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
+            print_err_and_quit("Could not decode peer message.");
+
+    } else {
+        char *tmp = "pass";
+        strcpy(new_buffer, tmp);
+    }
     if (strcmp(new_buffer, "pass") == 0)
         print_successs_msg("Last role has  been passed.");
     else {
@@ -146,24 +166,27 @@ char *wait_for_response(int bc_fd, int id) {
     return res;
 }
 
-void send_answers_back(char **answers, int best_answer, int server_fd) {
+void send_answers_back(char *question, char **answers, int best_answer, int server_fd) {
     if (best_answer < 0 || best_answer > 1)
         best_answer %= 2;
 
-    char res[2148];
+    char res[3172];
     if (best_answer == 0)
-        sprintf(res, "* Answer1: %s\nAnswer2: %s\n", answers[0], answers[1]);
+        sprintf(res, "Question: %s\n\t* Answer1: %s\n\t  Answer2: %s\n", question, answers[0], answers[1]);
     else
-        sprintf(res, "Answer1: %s\n* Answer2: %s\n", answers[0], answers[1]);
+        sprintf(res, "Question: %s\n\t  Answer1: %s\n\t* Answer2: %s\n", question, answers[0], answers[1]);
 
     send(server_fd, res, strlen(res), 0);
 }
+
+void al() {}
 
 int main(int argc, char *argv[]) {
     int port = atoi(argv[1]);
     if (port <= 0)
         print_err_and_quit("Invalid port number given. Quitting ");
 
+    signal(SIGALRM, al);
     siginterrupt(SIGALRM, 1);
 
 
@@ -183,7 +206,6 @@ int main(int argc, char *argv[]) {
 
     // receive the introduction message from the server and print it
     num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
-    printf("AAAAA: %d\n", num_of_bytes);
     print_msg(buffer, num_of_bytes, 1);
 
     // Read field choice from user (user response) and send it to server
@@ -212,7 +234,7 @@ int main(int argc, char *argv[]) {
         int asking_id;
 
         buffer[0] = '\0';
-        while(sscanf(buffer, "%d %d %d", &asking_id, &answering_ids[0], &answering_ids[1]) <= 0)
+        while (sscanf(buffer, "%d %d %d", &asking_id, &answering_ids[0], &answering_ids[1]) <= 0)
             num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
 
         sprintf(buffer, "It is client%d's role to ask.", asking_id);
@@ -220,7 +242,7 @@ int main(int argc, char *argv[]) {
         // Get users' questions and answers
         if (asking_id == id) {
             char **answers = malloc(sizeof(char) * 2);
-            ask_question(bc_fd, &address, id);
+            char *question = ask_question(bc_fd, &address, id);
 
             char *answer = wait_for_response(bc_fd, id);
 
@@ -232,12 +254,13 @@ int main(int argc, char *argv[]) {
             strcpy(answers[1], answer);
             print_msg("Please select the best answer: ", -1, 0);
             read(0, buffer, sizeof(buffer));
-            send_answers_back(answers, atoi(buffer) - 1, fd);
+            send_answers_back(question, answers, atoi(buffer) - 1, fd);
 
             free(answers[0]);
             free(answers[1]);
             free(answers);
             free(answer);
+            free(question);
         } else if (answering_ids[0] == id) {
             wait_for_question(bc_fd, id);
 
