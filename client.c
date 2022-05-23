@@ -183,7 +183,6 @@ int main(int argc, char *argv[]) {
 
     // receive the introduction message from the server and print it
     num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
-    printf("AAAAA: %d\n", num_of_bytes);
     print_msg(buffer, num_of_bytes, 1);
 
     // Read field choice from user (user response) and send it to server
