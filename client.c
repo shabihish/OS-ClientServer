@@ -27,7 +27,7 @@ void print_err_and_quit(char *msg) {
     exit(EXIT_SUCCESS);
 }
 
-void print_successs_msg(char *msg) {
+void print_success_msg(char *msg) {
     char *str = "\033[0;32m";
     write(1, str, strlen(str));
     write(1, msg, strlen(msg));
@@ -80,14 +80,14 @@ int get_broadcast_socket(int port, struct sockaddr_in *address) {
 }
 
 void udp_send(int bc_fd, char *buffer, struct sockaddr_in *address, int id) {
-    char id_str[100];
+    char id_str[100]={0};
     sprintf(id_str, "%d ", id);
     char *new_buffer = strcat(id_str, buffer);
     sendto(bc_fd, new_buffer, strlen(new_buffer), 0, (struct sockaddr *) address, sizeof(*address));
 }
 
 char *ask_question(int bc_fd, struct sockaddr_in *address, int id) {
-    char buffer[1024];
+    char buffer[1024]={0};
 
     print_msg("Please ask your question: \n", -1, 0);
     int num_of_bytes = read(0, buffer, sizeof(buffer));
@@ -101,17 +101,20 @@ char *ask_question(int bc_fd, struct sockaddr_in *address, int id) {
 }
 
 void wait_for_question(int bc_fd, int id) {
-    char buffer[1024];
+    char buffer[1024]={0};
 
     int sending_id;
-    char new_buffer[1024];
+    char new_buffer[1024]={0};
     int num_of_bytes = recv(bc_fd, buffer, sizeof(buffer), 0);
 
     if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
         print_err_and_quit("Could not decode peer message.");
 
-    if (id == sending_id)
+    while (id == sending_id){
         num_of_bytes = recv(bc_fd, buffer, sizeof(buffer), 0);
+        if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
+            print_err_and_quit("Could not decode peer message.");
+    }
 
     if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
         print_err_and_quit("Could not decode peer message.");
@@ -121,48 +124,50 @@ void wait_for_question(int bc_fd, int id) {
 
 void answer_question(int bc_fd, struct sockaddr_in *address, int id) {
     alarm(60);
-    char buffer[1024];
+
+    char buffer[1024]={0};
     print_msg("Please write your answer: ", -1, 1);
     if (read(0, buffer, sizeof(buffer)) > 0)
         udp_send(bc_fd, buffer, address, id);
     else{
-        char* tmp = "pass";
+        char* tmp = "pass\0";
+        print_success_msg("Timed out.");
         udp_send(bc_fd, tmp, address, id);
     }
-
+    alarm(0);
 }
 
 char *wait_for_response(int bc_fd, int id) {
-    alarm(60);
+    alarm(0);
 
-    char buffer[1024];
-    print_successs_msg("Awaiting response from the other client...");
+    char buffer[1024]={0};
+    print_success_msg("Awaiting response from the other client...");
     int num_of_bytes = recv(bc_fd, buffer, sizeof(buffer), 0);
 
     int sending_id;
-    char new_buffer[1024];
+    char new_buffer[1024]={0};
     if (num_of_bytes > 0) {
-
         if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
             print_err_and_quit("Could not decode peer message.");
-        if (id == sending_id)
+        new_buffer[num_of_bytes]='\0';
+        while (id == sending_id){
             num_of_bytes = recv(bc_fd, buffer, sizeof(buffer), 0);
-
-        if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
-            print_err_and_quit("Could not decode peer message.");
-
-    } else {
-        char *tmp = "pass";
-        strcpy(new_buffer, tmp);
+            buffer[num_of_bytes]='\0';
+            if (sscanf(buffer, "%d %s", &sending_id, new_buffer) <= 0)
+                print_err_and_quit("Could not decode peer message.");
+            new_buffer[num_of_bytes]='\0';
+        }
     }
+
     if (strcmp(new_buffer, "pass") == 0)
-        print_successs_msg("Last role has  been passed.");
+        print_success_msg("Last role has  been passed.");
     else {
         print_msg("New answer: ", -1, 0);
         print_msg(new_buffer, -1, 1);
     }
-    char *res = malloc(strlen(new_buffer) * sizeof(char));
+    char *res = malloc((strlen(new_buffer)+1) * sizeof(char));
     strcpy(res, new_buffer);
+    res[strlen(new_buffer)]='\0';
     return res;
 }
 
@@ -196,13 +201,13 @@ int main(int argc, char *argv[]) {
     int num_of_bytes = 0;
 
     fd = connect_server(port);
-    print_successs_msg("Connection to server has been established.");
+    print_success_msg("Connection to server has been established.");
 
     // receive the assigned ID from the server and print it
     num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
     int id = atoi(buffer);
     sprintf(buffer, "Your new id: %d", id);
-    print_successs_msg(buffer);
+    print_success_msg(buffer);
 
     // receive the introduction message from the server and print it
     num_of_bytes = recv(fd, buffer, sizeof(buffer), 0);
@@ -219,14 +224,14 @@ int main(int argc, char *argv[]) {
     print_msg(buffer, num_of_bytes, 1);
     int bc_port = atoi(buffer);
     sprintf(buffer, "Broadcast port is announced: %d", bc_port);
-    print_successs_msg(buffer);
+    print_success_msg(buffer);
 
     // New broadcast socket
     struct sockaddr_in address;
     int bc_fd = get_broadcast_socket(bc_port, &address);
     if (bc_fd < 0)
         print_err_and_quit("Could not open broadcast socket.");
-    print_successs_msg("Broadcast socket established.");
+    print_success_msg("Broadcast socket established.");
 
     for (int i = 0; i < 3; i++) {
         // Receive asking id ID from the server and print it
@@ -241,7 +246,7 @@ int main(int argc, char *argv[]) {
         print_msg(buffer, -1, 1);
         // Get users' questions and answers
         if (asking_id == id) {
-            char **answers = malloc(sizeof(char) * 2);
+            char **answers = malloc(sizeof(char*) * 2);
             char *question = ask_question(bc_fd, &address, id);
 
             char *answer = wait_for_response(bc_fd, id);
